@@ -11,12 +11,12 @@ namespace Microverse.Runtime
         {
             UnityMainThreadDispatcher.Ensure();
 
-            if (Object.FindObjectOfType<MicroverseApp>() != null)
+            if (Object.FindAnyObjectByType<MicroverseApp>() != null)
             {
                 return;
             }
 
-            if (Object.FindObjectOfType<EventSystem>() == null)
+            if (Object.FindAnyObjectByType<EventSystem>() == null)
             {
                 GameObject eventSystem = new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
                 Object.DontDestroyOnLoad(eventSystem);

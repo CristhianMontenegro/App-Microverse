@@ -43,7 +43,7 @@ namespace Microverse.UI
         private void BuildHeader()
         {
             TextMeshProUGUI logo = UiFactory.Text("Logo", Root.transform, "MicroVerse\nAR", 46, FontStyles.Bold, MicroverseTheme.Text);
-            logo.enableWordWrapping = false;
+            logo.textWrappingMode = TextWrappingModes.NoWrap;
             RectTransform logoRect = logo.rectTransform;
             logoRect.anchorMin = new Vector2(0f, 1f);
             logoRect.anchorMax = new Vector2(0f, 1f);
