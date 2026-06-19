@@ -1,0 +1,245 @@
+using System.Collections.Generic;
+using Microverse.Data;
+using Microverse.Services;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace Microverse.UI
+{
+    public class MicroverseApp : MonoBehaviour
+    {
+        private IModelCatalogService catalogService;
+        private IReadOnlyList<BiologicalModel> models;
+        private MicroverseLanguage language = MicroverseLanguage.Spanish;
+        private RectTransform screenRoot;
+        private BottomNavigationBar navigationBar;
+        private GameObject activeScreen;
+        private BiologicalModel selectedModel;
+        private string activeTab = "home";
+
+        private void Awake()
+        {
+            catalogService = new LocalModelCatalogService();
+            models = catalogService.GetModels();
+            selectedModel = models.Count > 0 ? models[0] : null;
+            BuildCanvas();
+            ShowHome();
+        }
+
+        private void BuildCanvas()
+        {
+            if (Camera.main != null)
+            {
+                Camera.main.backgroundColor = MicroverseTheme.Background;
+            }
+
+            GameObject canvasGo = new GameObject("MicroverseCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            canvasGo.transform.SetParent(transform, false);
+
+            Canvas canvas = canvasGo.GetComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 10;
+
+            CanvasScaler scaler = canvasGo.GetComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1080f, 1920f);
+            scaler.matchWidthOrHeight = 0.55f;
+
+            RectTransform canvasRect = canvasGo.GetComponent<RectTransform>();
+            UiFactory.Stretch(canvasRect);
+
+            Image background = UiFactory.Image("Background", canvasGo.transform, BiologyVisualFactory.CreateBackground(), Color.white);
+            UiFactory.Stretch(background.rectTransform);
+            background.type = Image.Type.Simple;
+            background.preserveAspect = false;
+
+            GameObject safeFrame = UiFactory.Panel("AppFrame", canvasGo.transform, new Color(0.01f, 0.03f, 0.08f, 0.62f), 30);
+            RectTransform frameRect = safeFrame.GetComponent<RectTransform>();
+            frameRect.anchorMin = Vector2.zero;
+            frameRect.anchorMax = Vector2.one;
+            frameRect.offsetMin = new Vector2(24f, 26f);
+            frameRect.offsetMax = new Vector2(-24f, -26f);
+
+            GameObject screenRootGo = new GameObject("ScreenRoot", typeof(RectTransform));
+            screenRootGo.transform.SetParent(canvasGo.transform, false);
+            screenRoot = screenRootGo.GetComponent<RectTransform>();
+            UiFactory.Stretch(screenRoot);
+
+            navigationBar = new BottomNavigationBar(canvasGo.transform, HandleNavigation);
+            navigationBar.SetSelected("home");
+        }
+
+        private void HandleNavigation(string tab)
+        {
+            activeTab = tab;
+            if (tab == "home")
+            {
+                ShowHome();
+                return;
+            }
+
+            if (tab == "scan" && selectedModel != null)
+            {
+                ShowDetail(selectedModel);
+                return;
+            }
+
+            ShowPlaceholder(tab);
+        }
+
+        private void ShowHome()
+        {
+            activeTab = "home";
+            ClearScreen();
+            HomeScreenView home = new HomeScreenView(screenRoot, models, language, ShowDetail, CycleLanguage);
+            activeScreen = home.Root;
+            navigationBar.SetSelected("home");
+        }
+
+        private void ShowDetail(BiologicalModel model)
+        {
+            selectedModel = model;
+            activeTab = "scan";
+            ClearScreen();
+            DetailScreenView detail = new DetailScreenView(screenRoot, models, model, language, ShowHome);
+            activeScreen = detail.Root;
+            navigationBar.SetSelected("scan");
+        }
+
+        private void ShowPlaceholder(string tab)
+        {
+            ClearScreen();
+            GameObject root = new GameObject("Placeholder-" + tab, typeof(RectTransform));
+            root.transform.SetParent(screenRoot, false);
+            UiFactory.Stretch(root.GetComponent<RectTransform>());
+            activeScreen = root;
+
+            string title = PlaceholderTitle(tab);
+            string body = PlaceholderBody(tab);
+
+            GameObject card = UiFactory.Panel("Content", root.transform, MicroverseTheme.Panel, 28);
+            RectTransform cardRect = card.GetComponent<RectTransform>();
+            cardRect.anchorMin = new Vector2(0.08f, 0.28f);
+            cardRect.anchorMax = new Vector2(0.92f, 0.72f);
+            cardRect.offsetMin = Vector2.zero;
+            cardRect.offsetMax = Vector2.zero;
+
+            TextMeshProUGUI titleText = UiFactory.Text("Title", card.transform, title, 42, FontStyles.Bold, MicroverseTheme.Text, TextAlignmentOptions.Center);
+            RectTransform titleRect = titleText.rectTransform;
+            titleRect.anchorMin = new Vector2(0f, 1f);
+            titleRect.anchorMax = new Vector2(1f, 1f);
+            titleRect.offsetMin = new Vector2(44f, -148f);
+            titleRect.offsetMax = new Vector2(-44f, -54f);
+
+            TextMeshProUGUI bodyText = UiFactory.Text("Body", card.transform, body, 25, FontStyles.Normal, MicroverseTheme.MutedText, TextAlignmentOptions.Center);
+            RectTransform bodyRect = bodyText.rectTransform;
+            bodyRect.anchorMin = new Vector2(0f, 0f);
+            bodyRect.anchorMax = new Vector2(1f, 1f);
+            bodyRect.offsetMin = new Vector2(56f, 86f);
+            bodyRect.offsetMax = new Vector2(-56f, -170f);
+        }
+
+        private void CycleLanguage()
+        {
+            switch (language)
+            {
+                case MicroverseLanguage.Spanish:
+                    language = MicroverseLanguage.English;
+                    break;
+                case MicroverseLanguage.English:
+                    language = MicroverseLanguage.Portuguese;
+                    break;
+                default:
+                    language = MicroverseLanguage.Spanish;
+                    break;
+            }
+
+            if (activeTab == "scan" && selectedModel != null)
+            {
+                ShowDetail(selectedModel);
+            }
+            else if (activeTab == "home")
+            {
+                ShowHome();
+            }
+            else
+            {
+                ShowPlaceholder(activeTab);
+            }
+        }
+
+        private void ClearScreen()
+        {
+            if (activeScreen != null)
+            {
+                Destroy(activeScreen);
+            }
+        }
+
+        private string PlaceholderTitle(string tab)
+        {
+            if (tab == "categories")
+            {
+                return TextFor("Categorias", "Categories", "Categorias");
+            }
+
+            if (tab == "learn")
+            {
+                return TextFor("Manual de uso", "Learning Guide", "Guia de uso");
+            }
+
+            if (tab == "profile")
+            {
+                return TextFor("Creditos", "Credits", "Creditos");
+            }
+
+            return TextFor("Modulo AR", "AR Module", "Modulo RA");
+        }
+
+        private string PlaceholderBody(string tab)
+        {
+            if (tab == "categories")
+            {
+                return TextFor(
+                    "Aqui se organizara el catalogo por clasificacion taxonomica cuando el backend entregue filtros.",
+                    "The catalog will be organized here by taxonomic classification when backend filters are available.",
+                    "Aqui o catalogo sera organizado por classificacao taxonomica quando o backend entregar filtros.");
+            }
+
+            if (tab == "learn")
+            {
+                return TextFor(
+                    "Espacio reservado para el manual integrado y la guia rapida de despliegue RA.",
+                    "Reserved space for the integrated manual and quick AR start guide.",
+                    "Espaco reservado para o manual integrado e guia rapida de RA.");
+            }
+
+            if (tab == "profile")
+            {
+                return TextFor(
+                    "Seccion preparada para logos ULS, LIITEC, Dra. Cassia Yano y colaboradores.",
+                    "Section prepared for ULS, LIITEC, Dr. Cassia Yano, and collaborators.",
+                    "Secao preparada para ULS, LIITEC, Dra. Cassia Yano e colaboradores.");
+            }
+
+            return TextFor(
+                "La vista AR queda lista para conectarse luego con marcadores fisicos, organelos tocables y descarga dinamica de modelos.",
+                "The AR view is ready to later connect physical markers, tappable organelles, and dynamic model downloads.",
+                "A vista RA fica pronta para conectar marcadores fisicos, organelas tocaveis e downloads dinamicos.");
+        }
+
+        private string TextFor(string spanish, string english, string portuguese)
+        {
+            switch (language)
+            {
+                case MicroverseLanguage.English:
+                    return english;
+                case MicroverseLanguage.Portuguese:
+                    return portuguese;
+                default:
+                    return spanish;
+            }
+        }
+    }
+}
