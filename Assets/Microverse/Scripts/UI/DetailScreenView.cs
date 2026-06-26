@@ -233,6 +233,11 @@ namespace Microverse.UI
                 {
                     mainVisual.sprite = current.LoadedPreviewSprite;
                 }
+                else if (BiologyVisualFactory.TryLoadPreviewSprite(current.PreviewUrl, out Sprite localPreview))
+                {
+                    current.LoadedPreviewSprite = localPreview;
+                    mainVisual.sprite = localPreview;
+                }
                 else
                 {
                     mainVisual.sprite = BiologyVisualFactory.CreateModelSprite(current);
