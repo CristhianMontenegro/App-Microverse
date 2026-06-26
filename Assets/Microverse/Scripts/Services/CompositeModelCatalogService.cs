@@ -41,16 +41,18 @@ namespace Microverse.Services
                 localModels =>
                 {
                     SetCatalog(localModels, localCatalog.GetCategories());
+                    MergeDownloadedModels();
                     remoteCatalog.LoadModels(
                         remoteModels =>
                         {
                             MergeRemoteModels(remoteModels, remoteCatalog.GetCategories());
+                            MergeDownloadedModels();
                             isLoaded = true;
                             onComplete?.Invoke(cachedModels);
                         },
                         remoteError =>
                         {
-                            Debug.LogWarning("Remote model catalog unavailable. Keeping bundled models only. Details: " + remoteError);
+                            Debug.LogWarning("Remote model catalog unavailable. Keeping bundled and downloaded models. Details: " + remoteError);
                             isLoaded = true;
                             onComplete?.Invoke(cachedModels);
                         });
@@ -71,8 +73,30 @@ namespace Microverse.Services
 
         private void MergeRemoteModels(IReadOnlyList<BiologicalModel> models, IReadOnlyList<string> categories)
         {
-            AddModels(models);
+            CacheDownloadedRemoteMetadata(models);
+            AddOrReplaceModels(models);
             AddCategories(categories);
+        }
+
+        private void MergeDownloadedModels()
+        {
+            IReadOnlyList<BiologicalModel> downloadedModels = ModelDownloadStore.GetDownloadedModels();
+            AddModels(downloadedModels);
+
+            for (int i = 0; i < downloadedModels.Count; i++)
+            {
+                BiologicalModel model = downloadedModels[i];
+                if (model == null || model.Category == null)
+                {
+                    continue;
+                }
+
+                string category = model.Category.Get(MicroverseLanguage.Spanish);
+                if (!string.IsNullOrWhiteSpace(category) && !cachedCategories.Contains(category))
+                {
+                    cachedCategories.Add(category);
+                }
+            }
         }
 
         private void AddModels(IReadOnlyList<BiologicalModel> models)
@@ -98,6 +122,58 @@ namespace Microverse.Services
 
                 cachedModels.Add(model);
                 knownIds.Add(model.Id);
+            }
+        }
+
+        private void AddOrReplaceModels(IReadOnlyList<BiologicalModel> models)
+        {
+            if (models == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < models.Count; i++)
+            {
+                BiologicalModel model = models[i];
+                if (model == null || string.IsNullOrWhiteSpace(model.Id))
+                {
+                    continue;
+                }
+
+                int existingIndex = IndexOfModel(model.Id);
+                if (existingIndex >= 0)
+                {
+                    cachedModels[existingIndex] = model;
+                    continue;
+                }
+
+                cachedModels.Add(model);
+            }
+        }
+
+        private int IndexOfModel(string modelId)
+        {
+            for (int i = 0; i < cachedModels.Count; i++)
+            {
+                if (cachedModels[i] != null && cachedModels[i].Id == modelId)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void CacheDownloadedRemoteMetadata(IReadOnlyList<BiologicalModel> models)
+        {
+            if (models == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < models.Count; i++)
+            {
+                ModelDownloadStore.CacheMetadataIfDownloaded(models[i]);
             }
         }
 

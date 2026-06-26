@@ -244,8 +244,10 @@ namespace Microverse.UI
             foreach (BiologicalModel model in visibleModels)
             {
                 bool available = ModelDownloadStore.IsAvailable(model);
-                bool canDownload = catalogMode == CatalogMode.Library && !available && !string.IsNullOrWhiteSpace(model.ModelFileUrl);
-                new ModelCardView(gridContent, model, language, onOpenModel, getText, RefreshGrid, available, canDownload, DownloadModel);
+                bool canDownload = CanDownload(model, available);
+                bool openable = available || (catalogMode == CatalogMode.Favorites && canDownload);
+                Action<BiologicalModel> openAction = available ? onOpenModel : DownloadModelThenOpen;
+                new ModelCardView(gridContent, model, language, openAction, getText, RefreshGrid, openable, canDownload, DownloadModel);
             }
 
             if (emptyStateText != null)
@@ -274,6 +276,13 @@ namespace Microverse.UI
                 && !model.IsBundledModel
                 && !ModelDownloadStore.IsAvailable(model)
                 && !string.IsNullOrWhiteSpace(model.ModelFileUrl);
+        }
+
+        private bool CanDownload(BiologicalModel model, bool available)
+        {
+            return !available
+                && !string.IsNullOrWhiteSpace(model.ModelFileUrl)
+                && (catalogMode == CatalogMode.Library || catalogMode == CatalogMode.Favorites);
         }
 
         private bool MatchesSearch(BiologicalModel model)
@@ -392,6 +401,28 @@ namespace Microverse.UI
                 }
 
                 RefreshGrid();
+            }));
+        }
+
+        private void DownloadModelThenOpen(BiologicalModel model)
+        {
+            MonoBehaviour runner = Root.GetComponentInParent<MonoBehaviour>();
+            if (runner == null)
+            {
+                Debug.LogWarning("Cannot download model without a coroutine runner.");
+                return;
+            }
+
+            runner.StartCoroutine(ModelDownloadStore.DownloadModelRoutine(model, (success, error) =>
+            {
+                if (!success)
+                {
+                    Debug.LogWarning("Model download failed: " + error);
+                    RefreshGrid();
+                    return;
+                }
+
+                onOpenModel?.Invoke(model);
             }));
         }
 
