@@ -95,6 +95,34 @@ namespace Microverse.UI
             return sprite;
         }
 
+        public static bool TryLoadPreviewSprite(string previewReference, out Sprite sprite)
+        {
+            sprite = null;
+            const string resourcePrefix = "resource:";
+            if (string.IsNullOrWhiteSpace(previewReference) || !previewReference.StartsWith(resourcePrefix))
+            {
+                return false;
+            }
+
+            string resourcePath = previewReference.Substring(resourcePrefix.Length);
+            string key = "preview-" + resourcePath;
+            if (Cache.TryGetValue(key, out sprite))
+            {
+                return true;
+            }
+
+            Texture2D texture = Resources.Load<Texture2D>(resourcePath);
+            if (texture == null)
+            {
+                Debug.LogWarning("Local preview resource not found: " + resourcePath);
+                return false;
+            }
+
+            sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+            Cache[key] = sprite;
+            return true;
+        }
+
         private static void DrawEllipse(Texture2D texture, Vector2 center, float rx, float ry, float angle, Color primary, Color secondary)
         {
             int width = texture.width;

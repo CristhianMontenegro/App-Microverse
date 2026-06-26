@@ -18,6 +18,7 @@ namespace Microverse.Data
 
         public string ModelFileUrl;
         public string PreviewUrl;
+        public bool IsBundledModel;
         [System.NonSerialized]
         public Sprite LoadedPreviewSprite;
 
@@ -33,7 +34,8 @@ namespace Microverse.Data
             int visualSeed,
             bool isElongated = false,
             string modelFileUrl = "",
-            string previewUrl = "")
+            string previewUrl = "",
+            bool isBundledModel = false)
         {
             Id = id;
             Name = name;
@@ -47,6 +49,7 @@ namespace Microverse.Data
             IsElongated = isElongated;
             ModelFileUrl = modelFileUrl;
             PreviewUrl = previewUrl;
+            IsBundledModel = isBundledModel;
             LoadedPreviewSprite = null;
         }
     }

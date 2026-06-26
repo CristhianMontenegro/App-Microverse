@@ -35,9 +35,6 @@ namespace Microverse.UI
             layout.childForceExpandHeight = true;
 
             AddTab("home", "nav.home");
-            AddTab("categories", "nav.categories");
-            AddTab("scan", "nav.scan");
-            AddTab("learn", "nav.learn");
             AddTab("profile", "nav.profile");
         }
 

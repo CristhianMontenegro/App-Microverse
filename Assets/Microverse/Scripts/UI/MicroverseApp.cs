@@ -42,8 +42,7 @@ namespace Microverse.UI
             BuildCanvas();
             ShowLoadingScreen();
 
-            // Try loading from Supabase first
-            catalogService = new SupabaseModelCatalogService();
+            catalogService = new CompositeModelCatalogService(new LocalModelCatalogService(), new SupabaseModelCatalogService());
             catalogService.LoadModels(
                 loadedModels => {
                     models = loadedModels;
@@ -52,21 +51,7 @@ namespace Microverse.UI
                     ShowHome();
                 },
                 error => {
-                    Debug.LogWarning("Supabase loading failed, falling back to LocalModelCatalogService. Details: " + error);
-                    
-                    // Fallback to Local Catalog
-                    catalogService = new LocalModelCatalogService();
-                    catalogService.LoadModels(
-                        localModels => {
-                            models = localModels;
-                            selectedModel = models.Count > 0 ? models[0] : null;
-                            ClearScreen();
-                            ShowHome();
-                        },
-                        localError => {
-                            Debug.LogError("Critical: Local catalog also failed to load. " + localError);
-                        }
-                    );
+                    Debug.LogError("Critical: Model catalog failed to load. " + error);
                 }
             );
         }
@@ -162,9 +147,8 @@ namespace Microverse.UI
                 return;
             }
 
-            if (tab == "scan" && selectedModel != null)
+            if (tab == "scan")
             {
-                ShowDetail(selectedModel);
                 return;
             }
 
@@ -175,7 +159,7 @@ namespace Microverse.UI
         {
             activeTab = "home";
             ClearScreen();
-            HomeScreenView home = new HomeScreenView(screenRoot, models, catalogService.GetCategories(), language, ShowDetail, CycleLanguage, GetUiText);
+            HomeScreenView home = new HomeScreenView(screenRoot, models, catalogService.GetCategories(), language, HandleModelSelected, CycleLanguage, GetUiText);
             activeScreen = home.Root;
             navigationBar.RefreshLabels();
             navigationBar.SetSelected("home");
@@ -185,7 +169,7 @@ namespace Microverse.UI
         {
             activeTab = "categories";
             ClearScreen();
-            CategoriesScreenView categoriesView = new CategoriesScreenView(screenRoot, models, catalogService.GetCategories(), language, ShowDetail, GetUiText);
+            CategoriesScreenView categoriesView = new CategoriesScreenView(screenRoot, models, catalogService.GetCategories(), language, HandleModelSelected, GetUiText);
             activeScreen = categoriesView.Root;
             navigationBar.RefreshLabels();
             navigationBar.SetSelected("categories");
@@ -200,6 +184,10 @@ namespace Microverse.UI
             activeScreen = detail.Root;
             navigationBar.RefreshLabels();
             navigationBar.SetSelected("scan");
+        }
+
+        private void HandleModelSelected(BiologicalModel model)
+        {
         }
 
         private void ShowPlaceholder(string tab)
