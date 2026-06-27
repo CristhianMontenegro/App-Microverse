@@ -22,7 +22,7 @@ namespace Microverse.Services
                 new Color(0.36f, 0.65f, 1.0f),
                 7,
                 false,
-                "builtin:Cromossomo.fbx",
+                "resource:Models/Cromossomo",
                 "resource:ModelPreviews/cromossomo-preview",
                 true)
         };

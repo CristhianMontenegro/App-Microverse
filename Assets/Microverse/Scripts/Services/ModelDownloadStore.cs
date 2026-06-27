@@ -11,8 +11,23 @@ namespace Microverse.Services
     public static class ModelDownloadStore
     {
         private const string PlayerPrefsKey = "microverse.downloaded_model_paths";
+        private const string CachedModelsKey = "microverse.downloaded_model_catalog";
         private static readonly Dictionary<string, string> DownloadedPaths = new Dictionary<string, string>();
+        private static readonly Dictionary<string, BiologicalModel> DownloadedModels = new Dictionary<string, BiologicalModel>();
         private static bool loaded;
+
+        [Serializable]
+        private class DownloadedModelRecord
+        {
+            public string LocalPath;
+            public BiologicalModel Model;
+        }
+
+        [Serializable]
+        private class DownloadedModelRecordList
+        {
+            public List<DownloadedModelRecord> Items = new List<DownloadedModelRecord>();
+        }
 
         public static bool IsAvailable(BiologicalModel model)
         {
@@ -49,6 +64,57 @@ namespace Microverse.Services
             return false;
         }
 
+        public static IReadOnlyList<BiologicalModel> GetDownloadedModels()
+        {
+            EnsureLoaded();
+            List<BiologicalModel> models = new List<BiologicalModel>();
+            foreach (KeyValuePair<string, BiologicalModel> entry in DownloadedModels)
+            {
+                if (string.IsNullOrWhiteSpace(entry.Key) ||
+                    !DownloadedPaths.TryGetValue(entry.Key, out string path) ||
+                    !File.Exists(path))
+                {
+                    continue;
+                }
+
+                BiologicalModel copy = CloneForOfflineCatalog(entry.Value);
+                if (copy != null)
+                {
+                    copy.IsBundledModel = false;
+                    models.Add(copy);
+                }
+            }
+
+            foreach (KeyValuePair<string, string> entry in DownloadedPaths)
+            {
+                if (DownloadedModels.ContainsKey(entry.Key) || !File.Exists(entry.Value))
+                {
+                    continue;
+                }
+
+                models.Add(CreateLegacyDownloadedModel(entry.Key, entry.Value));
+            }
+
+            return models;
+        }
+
+        public static void CacheMetadataIfDownloaded(BiologicalModel model)
+        {
+            if (model == null || string.IsNullOrWhiteSpace(model.Id))
+            {
+                return;
+            }
+
+            EnsureLoaded();
+            if (!DownloadedPaths.TryGetValue(model.Id, out string path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            CacheDownloadedModel(model);
+            Save();
+        }
+
         public static IEnumerator DownloadModelRoutine(BiologicalModel model, Action<bool, string> onComplete)
         {
             if (model == null)
@@ -59,6 +125,10 @@ namespace Microverse.Services
 
             if (IsAvailable(model))
             {
+                EnsureLoaded();
+                yield return PreviewImageStore.DownloadPreviewRoutine(model);
+                CacheDownloadedModel(model);
+                Save();
                 onComplete?.Invoke(true, string.Empty);
                 yield break;
             }
@@ -81,11 +151,18 @@ namespace Microverse.Services
                 string directory = Path.Combine(Application.persistentDataPath, "MicroverseModels");
                 Directory.CreateDirectory(directory);
 
-                string filePath = Path.Combine(directory, SafeFileName(model.Id) + ExtensionFromUrl(model.ModelFileUrl));
+                string fileName = FileNameFromUrl(model.ModelFileUrl);
+                string safeName = string.IsNullOrWhiteSpace(fileName)
+                    ? SafeFileName(model.Id) + ExtensionFromUrl(model.ModelFileUrl)
+                    : SafeFileName(model.Id + "-" + fileName);
+                string filePath = Path.Combine(directory, safeName);
                 File.WriteAllBytes(filePath, request.downloadHandler.data);
+
+                yield return PreviewImageStore.DownloadPreviewRoutine(model);
 
                 EnsureLoaded();
                 DownloadedPaths[model.Id] = filePath;
+                CacheDownloadedModel(model);
                 Save();
                 onComplete?.Invoke(true, string.Empty);
             }
@@ -100,29 +177,63 @@ namespace Microverse.Services
 
             loaded = true;
             DownloadedPaths.Clear();
+            DownloadedModels.Clear();
 
             string raw = PlayerPrefs.GetString(PlayerPrefsKey, string.Empty);
-            if (string.IsNullOrWhiteSpace(raw))
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                string[] rows = raw.Split('\n');
+                for (int i = 0; i < rows.Length; i++)
+                {
+                    string row = rows[i];
+                    int separator = row.IndexOf('|');
+                    if (separator <= 0)
+                    {
+                        continue;
+                    }
+
+                    string modelId = row.Substring(0, separator);
+                    string path = row.Substring(separator + 1);
+                    if (!string.IsNullOrWhiteSpace(modelId) && !string.IsNullOrWhiteSpace(path))
+                    {
+                        DownloadedPaths[modelId] = path;
+                    }
+                }
+            }
+
+            string cachedRaw = PlayerPrefs.GetString(CachedModelsKey, string.Empty);
+            if (string.IsNullOrWhiteSpace(cachedRaw))
             {
                 return;
             }
 
-            string[] rows = raw.Split('\n');
-            for (int i = 0; i < rows.Length; i++)
+            try
             {
-                string row = rows[i];
-                int separator = row.IndexOf('|');
-                if (separator <= 0)
+                DownloadedModelRecordList list = JsonUtility.FromJson<DownloadedModelRecordList>(cachedRaw);
+                if (list == null || list.Items == null)
                 {
-                    continue;
+                    return;
                 }
 
-                string modelId = row.Substring(0, separator);
-                string path = row.Substring(separator + 1);
-                if (!string.IsNullOrWhiteSpace(modelId) && !string.IsNullOrWhiteSpace(path))
+                for (int i = 0; i < list.Items.Count; i++)
                 {
-                    DownloadedPaths[modelId] = path;
+                    DownloadedModelRecord record = list.Items[i];
+                    if (record == null || record.Model == null || string.IsNullOrWhiteSpace(record.Model.Id))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(record.LocalPath))
+                    {
+                        DownloadedPaths[record.Model.Id] = record.LocalPath;
+                    }
+
+                    DownloadedModels[record.Model.Id] = CloneForOfflineCatalog(record.Model);
                 }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("Downloaded model catalog cache could not be read. Keeping path cache only. " + ex.Message);
             }
         }
 
@@ -135,7 +246,94 @@ namespace Microverse.Services
             }
 
             PlayerPrefs.SetString(PlayerPrefsKey, string.Join("\n", rows.ToArray()));
+
+            DownloadedModelRecordList list = new DownloadedModelRecordList();
+            foreach (KeyValuePair<string, BiologicalModel> entry in DownloadedModels)
+            {
+                if (string.IsNullOrWhiteSpace(entry.Key) ||
+                    !DownloadedPaths.TryGetValue(entry.Key, out string path) ||
+                    !File.Exists(path))
+                {
+                    continue;
+                }
+
+                list.Items.Add(new DownloadedModelRecord
+                {
+                    LocalPath = path,
+                    Model = CloneForOfflineCatalog(entry.Value)
+                });
+            }
+
+            PlayerPrefs.SetString(CachedModelsKey, JsonUtility.ToJson(list));
             PlayerPrefs.Save();
+        }
+
+        private static void CacheDownloadedModel(BiologicalModel model)
+        {
+            BiologicalModel copy = CloneForOfflineCatalog(model);
+            if (copy == null || string.IsNullOrWhiteSpace(copy.Id))
+            {
+                return;
+            }
+
+            copy.IsBundledModel = false;
+            DownloadedModels[copy.Id] = copy;
+        }
+
+        private static BiologicalModel CloneForOfflineCatalog(BiologicalModel model)
+        {
+            if (model == null)
+            {
+                return null;
+            }
+
+            return new BiologicalModel(
+                model.Id,
+                CloneText(model.Name),
+                CloneText(model.Subtitle),
+                CloneText(model.Category),
+                CloneText(model.Description),
+                model.ScientificName,
+                model.PrimaryColor,
+                model.SecondaryColor,
+                model.VisualSeed,
+                model.IsElongated,
+                model.ModelFileUrl,
+                model.PreviewUrl,
+                model.IsBundledModel);
+        }
+
+        private static LocalizedText CloneText(LocalizedText text)
+        {
+            if (text == null)
+            {
+                return new LocalizedText(string.Empty, string.Empty, string.Empty);
+            }
+
+            return new LocalizedText(text.Spanish, text.English, text.Portuguese);
+        }
+
+        private static BiologicalModel CreateLegacyDownloadedModel(string modelId, string localPath)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(localPath);
+            string displayName = string.IsNullOrWhiteSpace(fileName) ? "Modelo descargado" : fileName;
+            return new BiologicalModel(
+                modelId,
+                new LocalizedText(displayName, displayName, displayName),
+                new LocalizedText("Disponible sin conexion", "Available offline", "Disponivel offline"),
+                new LocalizedText("Descargados", "Downloaded", "Baixados"),
+                new LocalizedText(
+                    "Modelo guardado localmente antes de activar la cache offline completa.",
+                    "Model saved locally before the full offline cache was enabled.",
+                    "Modelo salvo localmente antes de ativar o cache offline completo."),
+                displayName,
+                new Color(0.35f, 0.78f, 0.96f),
+                new Color(0.92f, 0.42f, 0.74f),
+                Mathf.Abs(modelId.GetHashCode() % 100),
+                false,
+                localPath,
+                string.Empty,
+                false);
         }
 
         private static string SafeFileName(string value)
@@ -153,6 +351,18 @@ namespace Microverse.Services
             string clean = url.Split('?')[0];
             string extension = Path.GetExtension(clean);
             return string.IsNullOrWhiteSpace(extension) ? ".model" : extension;
+        }
+
+        private static string FileNameFromUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return string.Empty;
+            }
+
+            string clean = url.Split('?')[0];
+            string fileName = Path.GetFileName(clean);
+            return string.IsNullOrWhiteSpace(fileName) ? string.Empty : fileName;
         }
     }
 }

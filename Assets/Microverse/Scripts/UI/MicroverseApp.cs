@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using System.Threading.Tasks;
 using Microverse.Data;
 using Microverse.Services;
 using TMPro;
@@ -188,6 +191,13 @@ namespace Microverse.UI
 
         private void HandleModelSelected(BiologicalModel model)
         {
+            if (model == null)
+            {
+                return;
+            }
+
+            selectedModel = model;
+            EnterARMode(model);
         }
 
         private void ShowPlaceholder(string tab)
@@ -613,57 +623,408 @@ namespace Microverse.UI
 
         private GameObject LoadRealOrProcedural3DModel(BiologicalModel model)
         {
-#if UNITY_EDITOR
-            if (!string.IsNullOrEmpty(model.ModelFileUrl))
-            {
-                string filename = System.IO.Path.GetFileName(model.ModelFileUrl);
-                string filenameWithoutExtension = System.IO.Path.GetFileNameWithoutExtension(filename);
+            GameObject holder = new GameObject("3DCell_" + model.Id);
 
-                string[] guids = UnityEditor.AssetDatabase.FindAssets(filenameWithoutExtension);
-                if (guids != null && guids.Length > 0)
+            string localPath;
+            ModelDownloadStore.TryGetLocalModelPath(model, out localPath);
+
+            if (TryLoadBundledModelInto(holder, model, localPath))
+            {
+                return holder;
+            }
+
+            string gltfSource = FirstRuntimeGltfSource(localPath, model.ModelFileUrl);
+            if (!string.IsNullOrWhiteSpace(gltfSource))
+            {
+                GameObject fallback = CreateProcedural3DCell(model);
+                fallback.name = "LoadingFallbackModel";
+                fallback.transform.SetParent(holder.transform, false);
+                TryReplaceWithGltfModelAsync(holder, gltfSource, model);
+                return holder;
+            }
+
+            Destroy(holder);
+            return CreateProcedural3DCell(model);
+        }
+
+        private bool TryLoadBundledModelInto(GameObject holder, BiologicalModel model, string localPath)
+        {
+            List<string> candidates = BuildModelReferenceCandidates(model, localPath);
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                string resourcePath = ResourcePathFromReference(candidates[i]);
+                if (string.IsNullOrWhiteSpace(resourcePath))
                 {
-                    string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
+                    continue;
+                }
+
+                GameObject prefab = Resources.Load<GameObject>(resourcePath);
+                if (prefab != null)
+                {
+                    InstantiateAndNormalizeModel(holder, prefab, "BundledModel");
+                    Debug.Log("[AR Model] Loaded bundled model from Resources: " + resourcePath);
+                    return true;
+                }
+            }
+
+#if UNITY_EDITOR
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                string assetName = FileNameWithoutExtensionFromReference(candidates[i]);
+                if (string.IsNullOrWhiteSpace(assetName))
+                {
+                    continue;
+                }
+
+                string[] guids = UnityEditor.AssetDatabase.FindAssets(assetName + " t:GameObject", new[] { "Assets/Microverse/Models" });
+                for (int j = 0; j < guids.Length; j++)
+                {
+                    string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[j]);
                     GameObject prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
                     if (prefab != null)
                     {
-                        Debug.Log($"[AR Model] Successfully loaded real FBX model from Assets: '{path}'");
-                        
-                        // Create parent holder
-                        GameObject holder = new GameObject("3DCell_" + model.Id);
-                        
-                        // Instantiate the actual model as child
-                        GameObject inst = Instantiate(prefab);
-                        inst.name = "FBXModel";
-                        inst.transform.SetParent(holder.transform, false);
-                        
-                        // Calculate bounds of the child model in world space
-                        Renderer[] renderers = inst.GetComponentsInChildren<Renderer>();
-                        if (renderers.Length > 0)
-                        {
-                            Bounds bounds = renderers[0].bounds;
-                            for (int i = 1; i < renderers.Length; i++)
-                            {
-                                bounds.Encapsulate(renderers[i].bounds);
-                            }
-                            
-                            // Scale child so visual size is about 2.2f units
-                            float maxDimension = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
-                            if (maxDimension > 0.001f)
-                            {
-                                float targetSize = 2.2f;
-                                float scaleFactor = targetSize / maxDimension;
-                                inst.transform.localScale = Vector3.one * scaleFactor;
-                                inst.transform.localPosition = -bounds.center * scaleFactor;
-                            }
-                        }
-                        
-                        return holder;
+                        InstantiateAndNormalizeModel(holder, prefab, "EditorAssetModel");
+                        Debug.Log("[AR Model] Loaded FBX model from Assets: " + path);
+                        return true;
                     }
                 }
-                Debug.LogWarning($"[AR Model] Real model FBX file '{filename}' was not found in Assets. Falling back to procedural model.");
             }
 #endif
-            return CreateProcedural3DCell(model);
+
+            return false;
+        }
+
+        private List<string> BuildModelReferenceCandidates(BiologicalModel model, string localPath)
+        {
+            List<string> candidates = new List<string>();
+            AddCandidate(candidates, localPath);
+            AddCandidate(candidates, model != null ? model.ModelFileUrl : string.Empty);
+
+            string fileName = FileNameFromReference(model != null ? model.ModelFileUrl : string.Empty);
+            AddCandidate(candidates, fileName);
+
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                string withoutExtension = Path.GetFileNameWithoutExtension(fileName);
+                AddCandidate(candidates, "Models/" + withoutExtension);
+            }
+
+            if (model != null)
+            {
+                string name = model.Name.Get(MicroverseLanguage.Spanish);
+                if (!string.IsNullOrWhiteSpace(name) && name.ToLowerInvariant().Contains("cromossomo"))
+                {
+                    AddCandidate(candidates, "Models/Cromossomo");
+                }
+
+                string url = model.ModelFileUrl != null ? model.ModelFileUrl.ToLowerInvariant() : string.Empty;
+                if (url.Contains("cromossomo"))
+                {
+                    AddCandidate(candidates, "Models/Cromossomo");
+                }
+            }
+
+            return candidates;
+        }
+
+        private void AddCandidate(List<string> candidates, string candidate)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && !candidates.Contains(candidate))
+            {
+                candidates.Add(candidate);
+            }
+        }
+
+        private string ResourcePathFromReference(string reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+            {
+                return string.Empty;
+            }
+
+            if (reference.StartsWith("resource:", StringComparison.OrdinalIgnoreCase))
+            {
+                return StripExtension(reference.Substring("resource:".Length).Trim());
+            }
+
+            string clean = reference.Split('?')[0].Replace('\\', '/');
+            string fileName = Path.GetFileName(clean);
+            string withoutExtension = Path.GetFileNameWithoutExtension(fileName);
+
+            if (clean.StartsWith("Models/", StringComparison.OrdinalIgnoreCase))
+            {
+                return StripExtension(clean);
+            }
+
+            if (clean.Contains("/Models/"))
+            {
+                int index = clean.LastIndexOf("/Models/", StringComparison.OrdinalIgnoreCase);
+                return StripExtension(clean.Substring(index + 1));
+            }
+
+            return string.IsNullOrWhiteSpace(withoutExtension) ? string.Empty : "Models/" + withoutExtension;
+        }
+
+        private string StripExtension(string path)
+        {
+            string extension = Path.GetExtension(path);
+            return string.IsNullOrWhiteSpace(extension) ? path : path.Substring(0, path.Length - extension.Length);
+        }
+
+        private string FileNameFromReference(string reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+            {
+                return string.Empty;
+            }
+
+            string clean = reference.Split('?')[0].Replace('\\', '/');
+            return Path.GetFileName(clean);
+        }
+
+        private string FileNameWithoutExtensionFromReference(string reference)
+        {
+            string fileName = FileNameFromReference(reference);
+            return string.IsNullOrWhiteSpace(fileName) ? StripExtension(reference) : Path.GetFileNameWithoutExtension(fileName);
+        }
+
+        private void InstantiateAndNormalizeModel(GameObject holder, GameObject prefab, string instanceName)
+        {
+            ClearChildren(holder.transform);
+            GameObject inst = Instantiate(prefab);
+            inst.name = instanceName;
+            inst.transform.SetParent(holder.transform, false);
+            NormalizeHolderContents(holder);
+        }
+
+        private void NormalizeHolderContents(GameObject holder)
+        {
+            Renderer[] renderers = holder.GetComponentsInChildren<Renderer>();
+            if (renderers.Length == 0)
+            {
+                return;
+            }
+
+            Bounds bounds = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+
+            float maxDimension = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
+            if (maxDimension <= 0.001f)
+            {
+                return;
+            }
+
+            float scaleFactor = 2.2f / maxDimension;
+            Vector3 offset = -bounds.center * scaleFactor;
+            for (int i = 0; i < holder.transform.childCount; i++)
+            {
+                Transform child = holder.transform.GetChild(i);
+                child.localScale *= scaleFactor;
+                child.localPosition = child.localPosition * scaleFactor + offset;
+            }
+        }
+
+        private void ClearChildren(Transform parent)
+        {
+            for (int i = parent.childCount - 1; i >= 0; i--)
+            {
+                Destroy(parent.GetChild(i).gameObject);
+            }
+        }
+
+        private string FirstRuntimeGltfSource(string localPath, string remoteUrl)
+        {
+            if (IsRuntimeGltfSource(localPath))
+            {
+                return localPath;
+            }
+
+            if (IsRuntimeGltfSource(remoteUrl))
+            {
+                return remoteUrl;
+            }
+
+            return string.Empty;
+        }
+
+        private bool IsRuntimeGltfSource(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            string clean = value.Split('?')[0];
+            string extension = Path.GetExtension(clean).ToLowerInvariant();
+            return extension == ".glb" || extension == ".gltf";
+        }
+
+        private async void TryReplaceWithGltfModelAsync(GameObject holder, string source, BiologicalModel model)
+        {
+            bool loaded = await TryLoadGltfWithInstalledImporter(source, holder.transform);
+            if (!loaded || holder == null)
+            {
+                Debug.LogWarning("[AR Model] Could not load runtime glTF model for " + model.Name.Get(language) + ". Keeping procedural fallback.");
+                return;
+            }
+
+            ClearProceduralFallback(holder.transform);
+            NormalizeHolderContents(holder);
+            Debug.Log("[AR Model] Loaded runtime glTF model: " + source);
+        }
+
+        private async Task<bool> TryLoadGltfWithInstalledImporter(string source, Transform parent)
+        {
+            Type importerType = FindTypeInLoadedAssemblies("GLTFast.GltfImport");
+            if (importerType == null)
+            {
+                Debug.LogWarning("[AR Model] glTFast is not available yet. Unity Package Manager must resolve com.unity.cloud.gltfast.");
+                return false;
+            }
+
+            object importer = Activator.CreateInstance(importerType);
+            try
+            {
+                MethodInfo loadMethod = FindMethodStartingWith(importerType, "Load", typeof(string));
+                MethodInfo instantiateMethod = FindMethodStartingWith(importerType, "InstantiateMainSceneAsync", typeof(Transform));
+                if (loadMethod == null || instantiateMethod == null)
+                {
+                    return false;
+                }
+
+                object loadTask = loadMethod.Invoke(importer, BuildInvokeArguments(loadMethod, UrlForGltfImporter(source)));
+                await (Task)loadTask;
+                if (!TaskResult(loadTask))
+                {
+                    return false;
+                }
+
+                int existingChildCount = parent.childCount;
+                object instantiateTask = instantiateMethod.Invoke(importer, BuildInvokeArguments(instantiateMethod, parent));
+                await (Task)instantiateTask;
+
+                bool instantiated = TaskResult(instantiateTask);
+                return instantiated && parent.childCount > existingChildCount;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[AR Model] glTF runtime load failed: " + ex.Message);
+                return false;
+            }
+            finally
+            {
+                IDisposable disposable = importer as IDisposable;
+                if (disposable != null)
+                {
+                    disposable.Dispose();
+                }
+            }
+        }
+
+        private MethodInfo FindMethodStartingWith(Type type, string name, Type firstParameterType)
+        {
+            MethodInfo[] methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public);
+            for (int i = 0; i < methods.Length; i++)
+            {
+                MethodInfo method = methods[i];
+                if (method.Name != name)
+                {
+                    continue;
+                }
+
+                ParameterInfo[] parameters = method.GetParameters();
+                if (parameters.Length > 0 && parameters[0].ParameterType == firstParameterType && typeof(Task).IsAssignableFrom(method.ReturnType))
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
+        private object[] BuildInvokeArguments(MethodInfo method, object firstArgument)
+        {
+            ParameterInfo[] parameters = method.GetParameters();
+            object[] args = new object[parameters.Length];
+            if (args.Length == 0)
+            {
+                return args;
+            }
+
+            args[0] = firstArgument;
+            for (int i = 1; i < args.Length; i++)
+            {
+                if (parameters[i].HasDefaultValue)
+                {
+                    args[i] = parameters[i].DefaultValue;
+                    if (args[i] == DBNull.Value || args[i] == Type.Missing)
+                    {
+                        args[i] = parameters[i].ParameterType.IsValueType ? Activator.CreateInstance(parameters[i].ParameterType) : null;
+                    }
+                }
+                else if (parameters[i].ParameterType.IsValueType)
+                {
+                    args[i] = Activator.CreateInstance(parameters[i].ParameterType);
+                }
+                else
+                {
+                    args[i] = null;
+                }
+            }
+
+            return args;
+        }
+
+        private Type FindTypeInLoadedAssemblies(string fullName)
+        {
+            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            for (int i = 0; i < assemblies.Length; i++)
+            {
+                Type type = assemblies[i].GetType(fullName);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+
+            return null;
+        }
+
+        private bool TaskResult(object task)
+        {
+            PropertyInfo result = task.GetType().GetProperty("Result");
+            if (result == null || result.PropertyType != typeof(bool))
+            {
+                return true;
+            }
+
+            return (bool)result.GetValue(task);
+        }
+
+        private string UrlForGltfImporter(string source)
+        {
+            if (!string.IsNullOrWhiteSpace(source) && File.Exists(source))
+            {
+                return new Uri(source).AbsoluteUri;
+            }
+
+            return source;
+        }
+
+        private void ClearProceduralFallback(Transform parent)
+        {
+            for (int i = parent.childCount - 1; i >= 0; i--)
+            {
+                Transform child = parent.GetChild(i);
+                if (child.name == "LoadingFallbackModel")
+                {
+                    child.gameObject.SetActive(false);
+                    Destroy(child.gameObject);
+                }
+            }
         }
 
         private Material CreateTransparentMaterial(Color baseColor)

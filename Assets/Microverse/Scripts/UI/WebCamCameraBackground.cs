@@ -150,12 +150,11 @@ namespace Microverse.UI
         {
             foreach (var dev in deviceList)
             {
-                // Profile 1: Default constructor (driver defaults) - most compatible and avoids V4L2 mapping issues
-                attempts.Add(new CameraAttempt(dev.name));
-                // Profile 2: Standard-res (640x480, 30fps)
-                attempts.Add(new CameraAttempt(dev.name, 640, 480, 30));
-                // Profile 3: High-res (1280x720, 30fps)
+                // Prefer camera quality that fills a portrait AR view cleanly, then fall back to safer profiles.
+                attempts.Add(new CameraAttempt(dev.name, 1920, 1080, 30));
                 attempts.Add(new CameraAttempt(dev.name, 1280, 720, 30));
+                attempts.Add(new CameraAttempt(dev.name));
+                attempts.Add(new CameraAttempt(dev.name, 640, 480, 30));
             }
         }
 
@@ -189,6 +188,7 @@ namespace Microverse.UI
                 }
 
                 rawImage.texture = webcamTexture;
+                rawImage.uvRect = new Rect(0f, 0f, 1f, 1f);
                 webcamTexture.Play();
                 isInitialized = true;
             }
@@ -296,12 +296,17 @@ namespace Microverse.UI
                 }
             }
 
-            // Update aspect ratio fitter
-            float ratio = (float)webcamTexture.width / (float)webcamTexture.height;
-            fitter.aspectRatio = ratio;
-
             // Handle camera rotation on mobile device
             int rotationAngle = webcamTexture.videoRotationAngle;
+
+            // Fill the AR background while using the rotated camera aspect, avoiding false zoom from a wrong ratio.
+            bool isSideways = Mathf.Abs(rotationAngle) == 90 || Mathf.Abs(rotationAngle) == 270;
+            float ratio = isSideways
+                ? (float)webcamTexture.height / (float)webcamTexture.width
+                : (float)webcamTexture.width / (float)webcamTexture.height;
+            fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+            fitter.aspectRatio = ratio;
+
             rawImage.rectTransform.localEulerAngles = new Vector3(0f, 0f, -rotationAngle);
 
             // Handle vertical mirror (common with front cameras, but good to check)

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Microverse.Data;
+using Microverse.Services;
 using UnityEngine;
 
 namespace Microverse.UI
@@ -99,8 +100,25 @@ namespace Microverse.UI
         {
             sprite = null;
             const string resourcePrefix = "resource:";
-            if (string.IsNullOrWhiteSpace(previewReference) || !previewReference.StartsWith(resourcePrefix))
+            if (string.IsNullOrWhiteSpace(previewReference))
             {
+                return false;
+            }
+
+            if (!previewReference.StartsWith(resourcePrefix))
+            {
+                string cachedKey = "preview-cache-" + previewReference;
+                if (Cache.TryGetValue(cachedKey, out sprite))
+                {
+                    return true;
+                }
+
+                if (PreviewImageStore.TryLoadSprite(previewReference, out sprite))
+                {
+                    Cache[cachedKey] = sprite;
+                    return true;
+                }
+
                 return false;
             }
 
@@ -215,6 +233,7 @@ namespace Microverse.UI
                     Texture2D texture = UnityEngine.Networking.DownloadHandlerTexture.GetContent(request);
                     if (texture != null)
                     {
+                        PreviewImageStore.SaveTexture(url, texture);
                         Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
                         callback?.Invoke(sprite);
                     }
